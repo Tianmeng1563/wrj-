@@ -1,6 +1,4 @@
 import streamlit as st
-import folium
-from streamlit_folium import st_folium
 
 # 页面设置
 st.set_page_config(page_title="无人机智能化应用", layout="wide")
@@ -26,7 +24,7 @@ if "point_b" not in st.session_state:
 
 # ---------------------- 航线规划页面 ----------------------
 if page == "航线规划":
-    st.title("航线规划（3D/2D地图）")
+    st.title("航线规划")
 
     col1, col2 = st.columns([2, 1])
 
@@ -45,24 +43,11 @@ if page == "航线规划":
             st.session_state.point_b = (lat_b, lng_b)
 
     with col1:
-        # 地图
-        m = folium.Map(location=[32.233, 118.749], zoom_start=18)
-
+        st.subheader("坐标信息")
         if st.session_state.point_a:
-            folium.Marker(
-                st.session_state.point_a,
-                popup="起点A",
-                icon=folium.Icon(color="red")
-            ).add_to(m)
-
+            st.success(f"起点A：{st.session_state.point_a}")
         if st.session_state.point_b:
-            folium.Marker(
-                st.session_state.point_b,
-                popup="终点B",
-                icon=folium.Icon(color="green")
-            ).add_to(m)
-
-        st_folium(m, width="100%", height=500)
+            st.success(f"终点B：{st.session_state.point_b}")
 
     # 更新状态
     status_a.success("A点已设" if st.session_state.point_a else "A点未设")
