@@ -1,5 +1,6 @@
 import streamlit as st
-import pydeck as pdk
+import time
+import random
 
 st.set_page_config(page_title="无人机智能化应用", layout="wide")
 
@@ -19,7 +20,7 @@ if "point_a" not in st.session_state:
 if "point_b" not in st.session_state:
     st.session_state.point_b = None
 
-# 航线规划（带3D地图）
+# 航线规划
 if page == "航线规划":
     st.title("航线规划（3D地图）")
     col1, col2 = st.columns([2, 1])
@@ -38,50 +39,35 @@ if page == "航线规划":
             st.session_state.point_b = (lat_b, lng_b)
 
     with col1:
-        # 3D地图
-        view_state = pdk.ViewState(
-            latitude=32.233,
-            longitude=118.749,
-            zoom=16,
-            pitch=45,
-        )
-        layers = []
+        st.subheader("坐标信息")
         if st.session_state.point_a:
-            layers.append(pdk.Layer(
-                "ScatterplotLayer",
-                data=[{"position": [st.session_state.point_a[1], st.session_state.point_a[0]]}],
-                get_position="position",
-                get_radius=15,
-                get_color=[255, 0, 0],
-            ))
+            st.success(f"起点A：{st.session_state.point_a}")
         if st.session_state.point_b:
-            layers.append(pdk.Layer(
-                "ScatterplotLayer",
-                data=[{"position": [st.session_state.point_b[1], st.session_state.point_b[0]]}],
-                get_position="position",
-                get_radius=15,
-                get_color=[0, 255, 0],
-            ))
-
-        st.pydeck_chart(pdk.Deck(
-            map_style="mapbox://styles/mapbox/light-v9",
-            initial_view_state=view_state,
-            layers=layers,
-            height=500,
-        ))
+            st.success(f"终点B：{st.session_state.point_b}")
 
     status_a.success("A点已设" if st.session_state.point_a else "A点未设")
     status_b.success("B点已设" if st.session_state.point_b else "B点未设")
 
-# 飞行监控（心跳包）
+# 飞行监控（动态心跳）
 elif page == "飞行监控":
     st.title("飞行监控（心跳包）")
     st.subheader("实时心跳包数据")
-    st.write("设备状态：在线")
-    st.write("信号强度：96%")
-    st.write("电压：12.5V")
-    st.write("飞行模式：正常")
-    st.write("连接方式：WiFi")
-    st.write("GPS 状态：已锁定")
-    st.write("电池剩余：85%")
-    st.progress(96)
+
+    placeholder = st.empty()
+
+    while True:
+        signal = random.randint(90, 99)
+        voltage = round(random.uniform(12.3, 12.7), 1)
+        battery = random.randint(80, 90)
+
+        with placeholder.container():
+            st.write("设备状态：在线")
+            st.write(f"信号强度：{signal}%")
+            st.write(f"电压：{voltage}V")
+            st.write("飞行模式：正常")
+            st.write("连接方式：WiFi")
+            st.write("GPS 状态：已锁定")
+            st.write(f"电池剩余：{battery}%")
+            st.progress(signal)
+
+        time.sleep(1)
