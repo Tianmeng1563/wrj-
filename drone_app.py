@@ -1,73 +1,120 @@
 import streamlit as st
+import pydeck as pdk
 import time
 import random
 
-st.set_page_config(page_title="无人机智能化应用", layout="wide")
+# 深色主题
+st.set_page_config(page_title="无人机Demo", layout="wide")
 
-# 侧边栏
-st.sidebar.title("导航")
-page = st.sidebar.radio("功能页面", ["航线规划", "飞行监控"])
+# 坐标系转换
+def wgs84_to_gcj02(lat, lon):
+    pi = 3.14159265358979323846
+    a = 6378245.0
+    ee = 0.00669342162296594323
 
-coord_type = st.sidebar.radio("坐标系", ["GCJ-02(高德/百度)", "WGS-84"], index=0)
-st.sidebar.divider()
+    def transform_lat(x, y):
+        ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * (abs(x))**0.5
+        ret += (20.0 * (6.0 * (x * pi / 180.0)) + 20.0 * (6.0 * (y * pi / 180.0))) / 2.0
+        ret += (20.0 * (6.0 * (x * pi / 180.0))) / 2.0
+        ret += (40.0 * (6.0 * (x * pi / 180.0))) / 3.0
+        ret += (160.0 * (x * pi / 180.0)) / 3.0
+        ret += (320.0 * (x * pi / 180.0)) / 3.0
+        return ret
 
-st.sidebar.subheader("系统状态")
-status_a = st.sidebar.empty()
-status_b = st.sidebar.empty()
+    def transform_lon(x, y):
+        ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * (abs(x))**0.5
+        ret += (20.0 * (6.0 * (x * pi / 180.0)) + 20.0 * (6.0 * (y * pi / 180.0))) / 2.0
+        ret += (20.0 * (x * pi / 180.0)) / 2.0
+        ret += (40.0 * (x * pi / 180.0)) / 3.0
+        ret += (150.0 * (x * pi / 180.0)) / 3.0
+        ret += (300.0 * (x * pi / 180.0)) / 3.0
+        return ret
 
-if "point_a" not in st.session_state:
-    st.session_state.point_a = None
-if "point_b" not in st.session_state:
-    st.session_state.point_b = None
+    dLat = transform_lat(lon - 105.0, lat - 35.0)
+    dLon = transform_lon(lon - 105.0, lat - 35.0)
+    radLat = lat / 180.0 * pi
+    magic = 1 - ee * (radLat ** 2)
+    sqrtMagic = (magic)**0.5
+    dLat = (dLat * 180.0) / ((a * (1 - ee)) / (magic * sqrtMagic) * pi)
+    dLon = (dLon * 180.0) / (a / sqrtMagic * (radLat) * pi)
+    mgLat = lat + dLat
+    mgLon = lon + dLon
+    return mgLat, mgLon
+
+# 页面
+tab1, tab2 = st.tabs(["航线规划（3D地图）", "飞行监控（心跳包）"])
 
 # 航线规划
-if page == "航线规划":
-    st.title("航线规划（3D地图）")
-    col1, col2 = st.columns([2, 1])
+with tab1:
+    st.subheader("航线规划（3D地图）")
+    st.write("坐标信息")
 
-    with col2:
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        st.success("起点A：(32.2322, 118.7490)")
+        st.success("终点B：(32.6, 118.7490)")
+
+    with col_right:
         st.subheader("控制面板")
-        lat_a = st.number_input("起点A 纬度", value=32.2322, format="%.6f")
-        lng_a = st.number_input("起点A 经度", value=118.7490, format="%.6f")
-        lat_b = st.number_input("终点B 纬度", value=32.2343, format="%.6f")
-        lng_b = st.number_input("终点B 经度", value=118.7490, format="%.6f")
-        height = st.slider("飞行高度(m)", 10, 120, 50)
+        latA = st.number_input("起点A纬度", value=32.2322)
+        lonA = st.number_input("起点A经度", value=118.7490)
+        latB = st.number_input("终点B纬度", value=32.6)
+        lonB = st.number_input("终点B经度", value=118.7490)
+        height = st.slider("飞行高度(m)", 0, 100, 50)
+        st.button("设置A点")
+        st.button("设置B点")
 
-        if st.button("设置A点"):
-            st.session_state.point_a = (lat_a, lng_a)
-        if st.button("设置B点"):
-            st.session_state.point_b = (lat_b, lng_b)
+    # 3D地图（必显示）
+    a_lat, a_lon = wgs84_to_gcj02(latA, lonA)
+    b_lat, b_lon = wgs84_to_gcj02(latB, lonB)
 
-    with col1:
-        st.subheader("坐标信息")
-        if st.session_state.point_a:
-            st.success(f"起点A：{st.session_state.point_a}")
-        if st.session_state.point_b:
-            st.success(f"终点B：{st.session_state.point_b}")
+    view_state = pdk.ViewState(
+        latitude=a_lat,
+        longitude=a_lon,
+        zoom=14,
+        pitch=45,
+        bearing=0
+    )
 
-    status_a.success("A点已设" if st.session_state.point_a else "A点未设")
-    status_b.success("B点已设" if st.session_state.point_b else "B点未设")
+    layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=[
+            {"position": [a_lon, a_lat], "color": [255, 0, 0], "radius": 100},
+            {"position": [b_lon, b_lat], "color": [0, 255, 0], "radius": 100},
+        ],
+        get_position="position",
+        get_color="color",
+        get_radius="radius",
+    )
 
-# 飞行监控（动态心跳）
-elif page == "飞行监控":
-    st.title("飞行监控（心跳包）")
-    st.subheader("实时心跳包数据")
+    st.pydeck_chart(pdk.Deck(
+        map_style="mapbox://styles/mapbox/satellite-v9",
+        initial_view_state=view_state,
+        layers=[layer],
+        height=500
+    ))
 
-    placeholder = st.empty()
+# 心跳监控
+with tab2:
+    st.subheader("飞行监控（心跳包）")
+    hb_time = st.empty()
+    hb_latlon = st.empty()
+    hb_height = st.empty()
+    hb_battery = st.empty()
+    hb_status = st.empty()
 
     while True:
-        signal = random.randint(90, 99)
-        voltage = round(random.uniform(12.3, 12.7), 1)
-        battery = random.randint(80, 90)
+        t = time.strftime("%H:%M:%S")
+        lat = round(32.2322 + random.uniform(-0.0005, 0.0005), 4)
+        lon = round(118.749 + random.uniform(-0.0005, 0.0005), 4)
+        h = random.randint(45, 55)
+        bat = random.randint(80, 100)
 
-        with placeholder.container():
-            st.write("设备状态：在线")
-            st.write(f"信号强度：{signal}%")
-            st.write(f"电压：{voltage}V")
-            st.write("飞行模式：正常")
-            st.write("连接方式：WiFi")
-            st.write("GPS 状态：已锁定")
-            st.write(f"电池剩余：{battery}%")
-            st.progress(signal)
+        hb_time.metric("时间", t)
+        hb_latlon.metric("坐标", f"{lat}, {lon}")
+        hb_height.metric("高度", f"{h} m")
+        hb_battery.metric("电量", f"{bat}%")
+        hb_status.success("连接正常")
 
         time.sleep(1)
