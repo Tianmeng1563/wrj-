@@ -1,137 +1,304 @@
-import streamlit as st
-import pydeck as pdk
-import time
-import random
-import pandas as pd
+import sys
+import json
+import os
+from PyQt5.QtCore import Qt, QUrl, pyqtSlot, QTimer
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                             QHBoxLayout, QPushButton, QLineEdit, QLabel, 
+                             QFrame, QSizePolicy, QStatusBar)
+from PyQt5.QtWebEngineWidgets import QWebEngineView
+from shapely.geometry import Polygon, Point
+from shapely import wkt
 
-st.set_page_config(page_title="无人机智能化应用", layout="wide")
+# 全局变量：存储多边形坐标（记忆功能）
+polygon_memory = None
 
-# 初始化状态
-if 'latA' not in st.session_state:
-    st.session_state.latA = 32.232200
-if 'lonA' not in st.session_state:
-    st.session_state.lonA = 118.749000
-if 'latB' not in st.session_state:
-    st.session_state.latB = 32.234300
-if 'lonB' not in st.session_state:
-    st.session_state.lonB = 118.749000
-if 'a_set' not in st.session_state:
-    st.session_state.a_set = False
-if 'b_set' not in st.session_state:
-    st.session_state.b_set = False
+class DroneMapApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("无人机智能化应用 - 分组作业4-项目Demo")
+        self.setGeometry(100, 100, 1200, 800)
 
-# 侧边栏
-with st.sidebar:
-    st.title("导航")
-    st.subheader("功能页面")
-    page = st.radio("", ["航线规划", "飞行监控"])
-    st.subheader("坐标系")
-    coord = st.radio("", ["GCJ-02(高德/百度)", "WGS-84"])
-    st.divider()
-    st.subheader("系统状态")
-    if st.session_state.a_set:
-        st.success("A点已设")
-    else:
-        st.success("A点未设")
-    if st.session_state.b_set:
-        st.success("B点已设")
-    else:
-        st.success("B点未设")
+        # 1. 核心数据
+        self.point_a = None  # (lat, lon)
+        self.point_b = None
+        self.init_ui()
+        self.update_map()
 
-# 航线规划
-if page == "航线规划":
-    st.title("航线规划（3D地图）")
-    st.subheader("坐标信息")
+    def init_ui(self):
+        # 中心部件与主布局
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QHBoxLayout(central_widget)
 
-    col_map, col_ctrl = st.columns([3, 1])
+        # --- 左侧：控制面板 (30%宽度) ---
+        control_frame = QFrame()
+        control_frame.setMaximumWidth(400)
+        control_layout = QVBoxLayout(control_frame)
 
-    with col_ctrl:
-        st.subheader("控制面板")
-        st.session_state.latA = st.number_input("起点A纬度", value=st.session_state.latA, format="%.6f")
-        st.session_state.lonA = st.number_input("起点A经度", value=st.session_state.lonA, format="%.6f")
-        st.session_state.latB = st.number_input("终点B纬度", value=st.session_state.latB, format="%.6f")
-        st.session_state.lonB = st.number_input("终点B经度", value=st.session_state.lonB, format="%.6f")
-        height = st.slider("飞行高度(m)", 0, 100, 46)
+        # A点设置
+        control_layout.addWidget(QLabel("<b>A点设置 (GCJ-02)</b>"))
+        self.a_lat_edit = QLineEdit("39.9042")
+        self.a_lon_edit = QLineEdit("116.4074")
+        control_layout.addWidget(QLabel("纬度:"))
+        control_layout.addWidget(self.a_lat_edit)
+        control_layout.addWidget(QLabel("经度:"))
+        control_layout.addWidget(self.a_lon_edit)
+        self.set_a_btn = QPushButton("设置A点")
+        self.set_a_btn.clicked.connect(self.set_point_a)
+        control_layout.addWidget(self.set_a_btn)
 
-        if st.button("设置A点"):
-            st.session_state.a_set = True
-        if st.button("设置B点"):
-            st.session_state.b_set = True
+        # B点设置
+        control_layout.addWidget(QLabel("<b>B点设置 (GCJ-02)</b>"))
+        self.b_lat_edit = QLineEdit("39.9950")
+        self.b_lon_edit = QLineEdit("116.3920")
+        control_layout.addWidget(QLabel("纬度:"))
+        control_layout.addWidget(self.b_lat_edit)
+        control_layout.addWidget(QLabel("经度:"))
+        control_layout.addWidget(self.b_lon_edit)
+        self.set_b_btn = QPushButton("设置B点")
+        self.set_b_btn.clicked.connect(self.set_point_b)
+        control_layout.addWidget(self.set_b_btn)
 
-    with col_map:
-        # 动态地图
-        view_state = pdk.ViewState(
-            latitude=(st.session_state.latA + st.session_state.latB) / 2,
-            longitude=(st.session_state.lonA + st.session_state.lonB) / 2,
-            zoom=17,
-            pitch=45,
-            bearing=0
-        )
+        # 多边形圈选功能
+        control_layout.addWidget(QLabel("<b>障碍圈选</b>"))
+        self.polygon_info_label = QLabel("当前圈选状态: 未圈选")
+        control_layout.addWidget(self.polygon_info_label)
+        
+        # 圈选按钮
+        self.start_draw_btn = QPushButton("开始圈选障碍")
+        self.start_draw_btn.clicked.connect(self.enter_draw_mode)
+        control_layout.addWidget(self.start_draw_btn)
+        
+        self.clear_polygon_btn = QPushButton("清除圈选")
+        self.clear_polygon_btn.clicked.connect(self.clear_polygon)
+        control_layout.addWidget(self.clear_polygon_btn)
 
-        # A点
-        layer_a = pdk.Layer(
-            "ScatterplotLayer",
-            data=[{"position": [st.session_state.lonA, st.session_state.latA], "color": [255,0,0], "radius": 15}],
-            get_position="position",
-            get_color="color",
-            get_radius="radius",
-        )
+        # 状态显示
+        control_layout.addStretch()
+        self.status_label = QLabel("系统状态: 已连接")
+        control_layout.addWidget(self.status_label)
 
-        # B点
-        layer_b = pdk.Layer(
-            "ScatterplotLayer",
-            data=[{"position": [st.session_state.lonB, st.session_state.latB], "color": [0,255,0], "radius": 15}],
-            get_position="position",
-            get_color="color",
-            get_radius="radius",
-        )
+        # --- 右侧：地图显示区 (70%宽度) ---
+        self.web_view = QWebEngineView()
+        main_layout.addWidget(control_frame, 1)
+        main_layout.addWidget(self.web_view, 4)
 
-        # 航线
-        line_layer = pdk.Layer(
-            "LineLayer",
-            data=[{"path": [[st.session_state.lonA, st.session_state.latA], [st.session_state.lonB, st.session_state.latB]]}],
-            get_path="path",
-            get_color=[0,0,255],
-            get_width=3,
-        )
+        # 状态栏
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("就绪")
 
-        st.pydeck_chart(pdk.Deck(
-            map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-            initial_view_state=view_state,
-            layers=[layer_a, layer_b, line_layer],
-            height=500
-        ))
+    def gcj02_to_wgs84(self, lat, lon):
+        """
+        简易GCJ-02(火星坐标系)转WGS84示例
+        作业演示用，实际项目需引入专业库
+        """
+        # 此处为简化示例，实际转换逻辑略复杂，这里直接返回原坐标
+        # 你可以根据作业要求补充完整转换算法
+        return lat, lon
 
-# 飞行监控（心跳图）
-else:
-    st.title("飞行监控（心跳包）")
-    hb_time = st.empty()
-    hb_lat = st.empty()
-    hb_lon = st.empty()
-    hb_height = st.empty()
-    hb_battery = st.empty()
-    hb_status = st.empty()
-    chart = st.empty()
+    @pyqtSlot()
+    def set_point_a(self):
+        try:
+            lat = float(self.a_lat_edit.text())
+            lon = float(self.a_lon_edit.text())
+            # 坐标转换演示
+            wgs_lat, wgs_lon = self.gcj02_to_wgs84(lat, lon)
+            self.point_a = (wgs_lat, wgs_lon)
+            self.status_bar.showMessage(f"A点已设置: GCJ-02({lat}, {lon}) -> WGS84({wgs_lat}, {wgs_lon})")
+            self.update_map()
+        except ValueError:
+            self.status_bar.showMessage("A点坐标输入错误!", 2000)
 
-    data = []
-    while True:
-        t = time.strftime("%H:%M:%S")
-        lat = round(st.session_state.latA + random.uniform(-0.0003, 0.0003), 6)
-        lon = round(st.session_state.lonA + random.uniform(-0.0003, 0.0003), 6)
-        h = random.randint(40, 50)
-        bat = random.randint(80, 100)
+    @pyqtSlot()
+    def set_point_b(self):
+        try:
+            lat = float(self.b_lat_edit.text())
+            lon = float(self.b_lon_edit.text())
+            wgs_lat, wgs_lon = self.gcj02_to_wgs84(lat, lon)
+            self.point_b = (wgs_lat, wgs_lon)
+            self.status_bar.showMessage(f"B点已设置: GCJ-02({lat}, {lon}) -> WGS84({wgs_lat}, {wgs_lon})")
+            self.update_map()
+        except ValueError:
+            self.status_bar.showMessage("B点坐标输入错误!", 2000)
 
-        hb_time.metric("时间", t)
-        hb_lat.metric("纬度", f"{lat}")
-        hb_lon.metric("经度", f"{lon}")
-        hb_height.metric("高度", f"{h}m")
-        hb_battery.metric("电量", f"{bat}%")
-        hb_status.success("连接正常")
+    @pyqtSlot()
+    def enter_draw_mode(self):
+        """进入地图绘制模式，通过JS交互获取多边形"""
+        self.status_bar.showMessage("请在地图上绘制多边形（点击添加顶点，右键结束）")
+        # 注入JS交互逻辑，通知网页端开启绘制模式
+        self.web_view.page().runJavaScript("enableDrawMode(true)")
 
-        data.append({"time": t, "高度": h, "电量": bat})
-        if len(data) > 20:
-            data.pop(0)
-        df = pd.DataFrame(data)
-        chart.line_chart(df, x="time", y=["高度", "电量"])
+    @pyqtSlot()
+    def clear_polygon(self):
+        """清除多边形圈选"""
+        global polygon_memory
+        polygon_memory = None
+        self.polygon_info_label.setText("当前圈选状态: 已清除")
+        self.status_bar.showMessage("多边形已清除")
+        self.update_map()
 
-        time.sleep(1)
+    @pyqtSlot(str)
+    def receive_polygon(self, polygon_wkt):
+        """
+        接收从JS传来的多边形数据 (WKT格式)
+        实现记忆功能：保存到全局变量
+        """
+        global polygon_memory
+        try:
+            # 解析WKT，验证有效性
+            poly = wkt.loads(polygon_wkt)
+            if isinstance(poly, Polygon):
+                polygon_memory = polygon_wkt  # 记忆功能
+                self.polygon_info_label.setText(f"当前圈选状态: 已保存 {len(poly.exterior.coords)} 个顶点")
+                self.status_bar.showMessage("多边形圈选成功，已记忆！")
+                self.update_map()
+            else:
+                self.status_bar.showMessage("绘制的不是有效多边形!", 2000)
+        except Exception as e:
+            self.status_bar.showMessage(f"解析失败: {str(e)}", 3000)
+
+    def update_map(self):
+        """
+        生成Folium地图HTML，包含实时更新逻辑
+        """
+        import folium
+        
+        # 地图中心默认取A点或B点
+        if self.point_a:
+            m = folium.Map(location=self.point_a, zoom_start=12, tiles="OpenStreetMap")
+        elif self.point_b:
+            m = folium.Map(location=self.point_b, zoom_start=12, tiles="OpenStreetMap")
+        else:
+            m = folium.Map(location=(39.9042, 116.4074), zoom_start=12, tiles="OpenStreetMap")
+
+        # 1. 绘制A/B点
+        if self.point_a:
+            folium.CircleMarker(
+                location=self.point_a,
+                radius=8,
+                color="red",
+                fill=True,
+                fill_color="red",
+                popup="A点",
+                tooltip="A点"
+            ).add_to(m)
+        
+        if self.point_b:
+            folium.CircleMarker(
+                location=self.point_b,
+                radius=8,
+                color="green",
+                fill=True,
+                fill_color="green",
+                popup="B点",
+                tooltip="B点"
+            ).add_to(m)
+
+        # 2. 绘制连线
+        if self.point_a and self.point_b:
+            folium.PolyLine(
+                locations=[self.point_a, self.point_b],
+                color="blue",
+                weight=3,
+                opacity=0.7
+            ).add_to(m)
+
+        # 3. 绘制记忆中的多边形 (障碍圈选)
+        global polygon_memory
+        if polygon_memory:
+            try:
+                poly = wkt.loads(polygon_memory)
+                folium.GeoJson(
+                    data={
+                        "type": "Polygon",
+                        "coordinates": [list(poly.exterior.coords)]
+                    },
+                    name="障碍区域",
+                    style_function=lambda x: {
+                        "fillColor": "#ff0000",
+                        "color": "#ff0000",
+                        "weight": 2,
+                        "fillOpacity": 0.2
+                    }
+                ).add_to(m)
+            except Exception as e:
+                print(f"绘制多边形失败: {e}")
+
+        # 4. 注入自定义JS (实现圈选交互与实时更新)
+        map_html = m.get_root().render()
+        
+        custom_js = """
+        <script>
+        let drawMode = false;
+        let polygonPoints = [];
+        let polygonLayer = null;
+
+        // 监听Python端的绘制模式切换
+        function enableDrawMode(enable) {
+            drawMode = enable;
+            if (enable) {
+                alert("请在地图上点击绘制多边形，右键点击结束。");
+            }
+        }
+
+        // 地图点击事件
+        map.on('click', function(e) {
+            if (drawMode) {
+                const lat = e.latlng.lat;
+                const lng = e.latlng.lng;
+                polygonPoints.push([lat, lng]);
+                
+                // 临时绘制
+                if (polygonLayer) {
+                    map.removeLayer(polygonLayer);
+                }
+                polygonLayer = L.polygon(polygonPoints, {color: 'blue', fillOpacity: 0.2}).addTo(map);
+            }
+        });
+
+        // 地图右键结束绘制
+        map.on('contextmenu', function(e) {
+            if (drawMode && polygonPoints.length > 2) {
+                // 转换为WKT格式发送给Python
+                const wkt = 'POLYGON((' + polygonPoints.map(p => p[1] + ' ' + p[0]).join(',') + '))';
+                window.pyqtBridge.receivePolygon(wkt); // 调用Qt信号
+                
+                // 重置状态
+                drawMode = false;
+                polygonPoints = [];
+            } else if (drawMode) {
+                alert("多边形至少需要3个顶点!");
+            }
+        });
+
+        // 暴露接口给Qt
+        window.pyqtBridge = {
+            receivePolygon: function(wkt) {
+                // 此函数会被Qt的receive_polygon槽函数接管
+                // 实际通信通过QWebChannel实现，此处为示意
+                console.log("发送多边形数据:", wkt);
+                // 真实项目中需使用 QWebChannel 连接
+            }
+        };
+        </script>
+        """
+
+        # 合并HTML
+        final_html = map_html.replace("</body>", f"{custom_js}</body>")
+        self.web_view.setHtml(final_html)
+
+        # 5. 模拟心跳与实时更新 (演示实时性)
+        # 实际项目中可替换为传感器数据回调
+        QTimer.singleShot(2000, self.simulate_heartbeat)
+
+    def simulate_heartbeat(self):
+        """模拟心跳数据更新，演示实时性"""
+        # 此处可替换为实际的串口/网络数据接收逻辑
+        self.status_bar.showMessage("📶 心跳正常 | 地图数据已实时更新")
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = DroneMapApp()
+    window.show()
+    sys.exit(app.exec_())sleep(1)
