@@ -1,4 +1,5 @@
-PyQt5>=5.15.0
-PyQtWebEngine>=5.15.0
-folium>=0.14.0
-shapely>=2.0.0
+streamlit
+folium
+streamlit-folium
+pandas
+numpy
